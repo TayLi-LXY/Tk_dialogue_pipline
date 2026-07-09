@@ -5,17 +5,20 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TK_COPILOT_URL = "http://tkcopilot.tkitg.com"
 TK_COPILOT_URL_HTTPS = "https://tkcopilot.taikang.com"
 
-# 流式 ASR 1.0 WebSocket
-ASR_WS_URL = "ws://tkcopilot.tkitg.com/api/v3/sauc/bigmodel"
+# 流式 ASR 2.0 WebSocket（v0.2）
+ASR_MODEL_VERSION = "2.0"
+ASR_WS_URL = "ws://tkcopilot.tkitg.com/api/v3/sauc/bigmodel_async"
 ASR_APP_KEY = "tkcopilot"
 ASR_ACCESS_KEY = "你的ASR密钥填这里"
-ASR_RESOURCE_ID = "volc.bigasr.sauc.duration"
+ASR_RESOURCE_ID = "volc.seedasr.sauc.duration"
 ASR_APP_KEY_RES = "PlgvMymc7f3tQnJ6"
 
 # ASR 请求参数
 ASR_BOOSTING_TABLE_ID = "7629728d-cc2c-498a-aa83-ecb3f94df82c"
 ASR_ENABLE_DDC = True
 ASR_ENABLE_SPEAKER_INFO = True
+ASR_ENABLE_NONSTREAM = True
+ASR_SSD_VERSION = "200"
 ASR_CHUNK_MS = 200
 
 # 录音文件标准版（备用，当前未使用）

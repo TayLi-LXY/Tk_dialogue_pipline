@@ -95,8 +95,13 @@ def extract_utterances(asr_result):
             or additions.get("speaker")
             or additions.get("speaker_id")
             or u.get("channel")
-            or f"speaker_{i}"
         )
+        if speaker is None:
+            speaker_label = "unknown"
+        elif str(speaker).startswith("speaker"):
+            speaker_label = str(speaker)
+        else:
+            speaker_label = f"speaker_{speaker}"
         text = u.get("text") or u.get("words") or u.get("sentence") or u.get("content") or ""
         start = u.get("start_time") or u.get("start_ms") or u.get("begin_time") or 0
         end = u.get("end_time") or u.get("end_ms") or u.get("finish_time") or 0
@@ -116,7 +121,7 @@ def extract_utterances(asr_result):
             return str(s)
 
         normalized.append({
-            "speaker": f"speaker_{speaker}" if not str(speaker).startswith("speaker") else str(speaker),
+            "speaker": speaker_label,
             "text": text,
             "start_time": fmt(start),
             "end_time": fmt(end),
@@ -134,17 +139,16 @@ def refine_dialogue_with_llm(utterances, video_name=""):
 
     sys_prompt = """你是一个专业的对话分析专家，擅长从语音转写文本中识别对话角色和场景。
 
-你的任务：
-1. 判断哪个 speaker 是「保险代理人」（主动推销、讲解产品、回答问题），哪个是「客户」（提问、回应、表达需求）
-2. 如果场景明显是保险销售/咨询服务，请据此标记角色
-3. 如果不是保险销售场景，按实际角色标记（如销售员/顾客、医生/患者等）
-4. 修正 ASR 识别中可能的错别字
-5. 保留原始时间戳
+输入数据可能包含 ASR 说话人分离结果（如 speaker_0、speaker_1）。规则：
+1. 同一个 speaker 编号始终对应同一人，请先归纳各 speaker 的身份，再标注每轮对话
+2. 全程通常只有 2 个角色：「保险代理人」和「客户」；若 speaker 编号超过 2 个，将语义上同一人合并到同一角色
+3. 判断依据：主动推销、讲解产品、办理理赔的是代理人；表达态度、提问、回应的是客户
+4. 修正 ASR 错别字，保留原始时间戳，不要合并不同说话人的句子
 
 输出格式（严格 JSON）：
 {
   "scenario_type": "保险销售/保险咨询/其他",
-  "role_mapping": {"speaker_X": "代理人", "speaker_Y": "客户"},
+  "role_mapping": {"speaker_0": "代理人", "speaker_1": "客户"},
   "dialogues": [
     {
       "turn_id": 1,

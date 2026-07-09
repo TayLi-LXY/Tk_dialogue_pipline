@@ -17,8 +17,11 @@ from config import (
     ASR_BOOSTING_TABLE_ID,
     ASR_CHUNK_MS,
     ASR_ENABLE_DDC,
+    ASR_ENABLE_NONSTREAM,
     ASR_ENABLE_SPEAKER_INFO,
+    ASR_MODEL_VERSION,
     ASR_RESOURCE_ID,
+    ASR_SSD_VERSION,
     ASR_WS_URL,
     FFMPEG_CHANNELS,
     FFMPEG_SAMPLE_RATE,
@@ -156,6 +159,10 @@ def _build_client_request() -> dict[str, Any]:
         request["enable_ddc"] = True
     if ASR_ENABLE_SPEAKER_INFO:
         request["enable_speaker_info"] = True
+        if ASR_SSD_VERSION:
+            request["ssd_version"] = ASR_SSD_VERSION
+    if ASR_ENABLE_NONSTREAM:
+        request["enable_nonstream"] = True
     if ASR_BOOSTING_TABLE_ID:
         request["corpus"] = {"boosting_table_id": ASR_BOOSTING_TABLE_ID}
 
@@ -181,6 +188,37 @@ async def _recv_with_timeout(ws, timeout: float = 30.0) -> dict[str, Any]:
     return _parse_response(data)
 
 
+async def _drain_responses(ws, state: dict[str, Any]) -> None:
+    """后台持续接收 ASR 响应，避免发送循环被逐包 recv 阻塞。"""
+    while not state.get("done"):
+        try:
+            resp = await _recv_with_timeout(ws, timeout=180)
+        except TimeoutError as exc:
+            if state.get("audio_sent"):
+                state["error"] = TimeoutError("ASR 在音频发送完成后长时间无响应")
+                break
+            continue
+
+        if resp.get("message_type") == SERVER_ERROR_RESPONSE:
+            state["error"] = RuntimeError(f"ASR 识别错误: {resp}")
+            break
+
+        payload = resp.get("payload") or {}
+        if payload:
+            state["final_result"] = payload
+            utterances = (
+                payload.get("result", {}).get("utterances")
+                or payload.get("utterances")
+                or []
+            )
+            if utterances:
+                state["utterances"] = utterances
+
+        if resp.get("is_last_package"):
+            state["done"] = True
+            break
+
+
 async def _transcribe_pcm_async(pcm_data: bytes) -> dict[str, Any]:
     request_id = str(uuid.uuid4())
     connect_id = str(uuid.uuid4())
@@ -200,11 +238,17 @@ async def _transcribe_pcm_async(pcm_data: bytes) -> dict[str, Any]:
         raise RuntimeError("音频为空")
 
     print(f"[Step2] 连接流式 ASR: {ASR_WS_URL}")
-    print(f"  - resource-id: {ASR_RESOURCE_ID}")
+    print(f"  - model: {ASR_MODEL_VERSION}, resource-id: {ASR_RESOURCE_ID}")
+    print(f"  - speaker_info={ASR_ENABLE_SPEAKER_INFO}, ssd_version={ASR_SSD_VERSION}")
     print(f"  - 音频分包: {len(chunks)} 包 x ~{ASR_CHUNK_MS}ms")
 
-    final_result: dict[str, Any] = {}
-    all_utterances: list[dict[str, Any]] = []
+    state: dict[str, Any] = {
+        "done": False,
+        "audio_sent": False,
+        "final_result": {},
+        "utterances": [],
+        "error": None,
+    }
 
     async with websockets.connect(
         ASR_WS_URL,
@@ -228,6 +272,8 @@ async def _transcribe_pcm_async(pcm_data: bytes) -> dict[str, Any]:
         if init_resp.get("message_type") == SERVER_ERROR_RESPONSE:
             raise RuntimeError(f"ASR 初始化失败: {init_resp}")
 
+        receiver = asyncio.create_task(_drain_responses(ws, state))
+
         for idx, chunk in enumerate(chunks):
             is_last = idx == len(chunks) - 1
             flags = LAST_PACKET if is_last else POS_SEQUENCE
@@ -240,50 +286,32 @@ async def _transcribe_pcm_async(pcm_data: bytes) -> dict[str, Any]:
                 serialization=NO_SERIALIZATION,
             )
             await ws.send(audio_frame)
-
-            if is_last:
-                while True:
-                    resp = await _recv_with_timeout(ws, timeout=120)
-                    if resp.get("message_type") == SERVER_ERROR_RESPONSE:
-                        raise RuntimeError(f"ASR 识别错误: {resp}")
-
-                    payload = resp.get("payload") or {}
-                    if payload:
-                        final_result = payload
-                        utterances = (
-                            payload.get("result", {}).get("utterances")
-                            or payload.get("utterances")
-                            or []
-                        )
-                        if utterances:
-                            all_utterances = utterances
-
-                    if resp.get("is_last_package"):
-                        break
-            else:
-                try:
-                    resp = await _recv_with_timeout(ws, timeout=5)
-                    payload = resp.get("payload") or {}
-                    if payload:
-                        final_result = payload
-                        utterances = (
-                            payload.get("result", {}).get("utterances")
-                            or payload.get("utterances")
-                            or []
-                        )
-                        if utterances:
-                            all_utterances = utterances
-                except TimeoutError:
-                    pass
+            await asyncio.sleep(ASR_CHUNK_MS / 1000.0)
 
             if (idx + 1) % 50 == 0 or is_last:
                 print(f"  - 已发送 {idx + 1}/{len(chunks)} 包", flush=True)
+
+        state["audio_sent"] = True
+        await receiver
+
+        if state.get("error"):
+            raise state["error"]
+
+    final_result = state.get("final_result") or {}
+    all_utterances = state.get("utterances") or []
 
     if all_utterances:
         final_result.setdefault("result", {})["utterances"] = all_utterances
 
     text = (final_result.get("result") or {}).get("text", "")
-    print(f"[Step2] ASR 完成，文本长度 {len(text)}，分句 {len(all_utterances)} 条")
+    speakers = set()
+    for u in all_utterances:
+        additions = u.get("additions") or {}
+        sp = u.get("speaker") or u.get("speaker_id") or additions.get("speaker") or additions.get("speaker_id")
+        if sp is not None:
+            speakers.add(str(sp))
+    speaker_info = f"，说话人 {len(speakers)} 个" if speakers else "，未返回说话人字段"
+    print(f"[Step2] ASR 完成，文本长度 {len(text)}，分句 {len(all_utterances)} 条{speaker_info}")
     return final_result
 
 
