@@ -1,0 +1,24 @@
+# 密钥配置（请复制 config.example.py 为 config.py 后填写）
+config.py
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 媒体与输出（体积大，不纳入版本库）
+input_videos/*
+!input_videos/.gitkeep
+output/
+*.mp4
+*.wav
+*.mkv
+*.avi
+*.mov
+
+# 系统与 IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
