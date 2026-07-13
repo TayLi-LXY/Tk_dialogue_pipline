@@ -21,12 +21,7 @@ def dialogue_json_to_txt(json_path: str, txt_path: str | None = None) -> str:
         text = (item.get("text") or "").strip()
         if not text:
             continue
-        if lines and lines[-1].startswith(f"{speaker}："):
-            prev = lines[-1]
-            prev_text = prev.split("：", 1)[1]
-            lines[-1] = f"{speaker}：{prev_text}{text}"
-        else:
-            lines.append(f"{speaker}：{text}")
+        lines.append(f"{speaker}：{text}")
 
     with open(txt_path, "w", encoding="utf-8") as f:
         f.write("\n\n".join(lines))
